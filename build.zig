@@ -28,8 +28,8 @@ pub fn build(b: *std.Build) void {
     const vulkan = b.dependency("vulkan", .{
         .registry = std.Build.LazyPath{ .cwd_relative = registry_path },
     }).module("vulkan-zig");
-
     exe.root_module.addImport("vulkan", vulkan);
+
     b.installArtifact(exe);
 
     const run_step = b.step("run", "Run the app");
