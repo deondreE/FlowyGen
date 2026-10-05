@@ -1,8 +1,14 @@
 .{
     .name = .flowygen,
+    .version = "0.0.0",
     .fingerprint = 0x64cf309a2fa25844, // Changing this has security and trust implications.
     .minimum_zig_version = "0.17.0",
-    .dependencies = .{},
+    .dependencies = .{
+        .vulkan = .{
+            .url = "git+https://github.com/Snektron/vulkan-zig#f9688c6f4ebcb930f67044698ddd1322442e714b",
+            .hash = "vulkan-0.0.0-r7Ytx4yGAwDZf0XsT6_L1ol_XUAkyOgOyBqamf8begA0",
+        },
+    },
     .paths = .{
         "build.zig",
         "build.zig.zon",

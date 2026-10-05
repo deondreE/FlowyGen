@@ -3,9 +3,11 @@ const std = @import("std");
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
+
     const mod = b.addModule("flowygen", .{
         .root_source_file = b.path("src/root.zig"),
         .target = target,
+        .optimize = optimize,
     });
 
     const exe = b.addExecutable(.{
@@ -19,25 +21,27 @@ pub fn build(b: *std.Build) void {
             },
         }),
     });
-    b.installArtifact(exe);
-    const run_step = b.step("run", "Run the app");
 
+    const vulkan_sdk = b.graph.environ_map.get("VULKAN_SDK") orelse "C:\\VulkanSDK\\1.4.357.0";
+    const registry_path = b.pathJoin(&.{ vulkan_sdk, "share", "vulkan", "registry", "vk.xml" });
+
+    const vulkan = b.dependency("vulkan", .{
+        .registry = std.Build.LazyPath{ .cwd_relative = registry_path },
+    }).module("vulkan-zig");
+
+    exe.root_module.addImport("vulkan", vulkan);
+    b.installArtifact(exe);
+
+    const run_step = b.step("run", "Run the app");
     const run_cmd = b.addRunArtifact(exe);
     run_step.dependOn(&run_cmd.step);
-
     run_cmd.step.dependOn(b.getInstallStep());
-
     run_cmd.addPassthruArgs();
 
-    const mod_tests = b.addTest(.{
-        .root_module = mod,
-    });
-
+    const mod_tests = b.addTest(.{ .root_module = mod });
     const run_mod_tests = b.addRunArtifact(mod_tests);
 
-    const exe_tests = b.addTest(.{
-        .root_module = exe.root_module,
-    });
+    const exe_tests = b.addTest(.{ .root_module = exe.root_module });
     const run_exe_tests = b.addRunArtifact(exe_tests);
 
     const test_step = b.step("test", "Run tests");
