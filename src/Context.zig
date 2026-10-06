@@ -111,7 +111,11 @@ pub fn init(allocator: Allocator, app_name: [*:0]const u8, window: *Window) !Con
         },
     };
 
+    // Dynamic rendering
+    const features13: vk.PhysicalDeviceVulkan13Features = .{ .dynamic_rendering = .true };
+
     const device_handle = try self.instance.createDevice(self.pdev, &.{
+        .p_next = &features13,
         .queue_create_info_count = queue_infos.len,
         .p_queue_create_infos = &queue_infos,
         .enabled_extension_count = @intCast(dev_ext_count),

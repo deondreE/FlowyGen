@@ -3,6 +3,7 @@ const vk = @import("vulkan");
 const Context = @import("Context.zig");
 const Swapchain = @import("Swapchain.zig");
 const Window = @import("window.zig");
+const Pipeline = @import("Pipeline.zig");
 
 const Renderer = @This();
 
@@ -52,6 +53,54 @@ pub const Frame = struct {
         self.transition(.transfer_dst_optimal);
         const value: vk.ClearColorValue = .{ .float_32 = color };
         self.cmd.clearColorImage(self.image, .transfer_dst_optimal, &value, @ptrCast(&color_range));
+    }
+
+    pub fn beginRendering(self: *Frame, clear_color: [4]f32) void {
+        self.transition(.color_attachment_optimal);
+
+        const attachment: vk.RenderingAttachmentInfo = .{
+            .image_view = self.view,
+            .image_layout = .color_attachment_optimal,
+            .resolve_mode = .{},
+            .resolve_image_view = .null_handle,
+            .resolve_image_layout = .undefined,
+            .load_op = .clear,
+            .store_op = .store,
+            .clear_value = .{
+                .color = .{ .float_32 = clear_color },
+            },
+        };
+        self.cmd.beginRendering(&.{
+            .render_area = .{ .offset = .{ .x = 0, .y = 0 }, .extent = self.extent },
+            .layer_count = 1,
+            .view_mask = 0,
+            .color_attachment_count = 1,
+            .p_color_attachments = @ptrCast(&attachment),
+        });
+
+        const viewport: vk.Viewport = .{
+            .x = 0,
+            .y = 0,
+            .width = @floatFromInt(self.extent.width),
+            .height = @floatFromInt(self.extent.height),
+            .min_depth = 0,
+            .max_depth = 1,
+        };
+        const scissor: vk.Rect2D = .{ .offset = .{ .x = 0, .y = 0 }, .extent = self.extent };
+        self.cmd.setViewport(0, &.{viewport});
+        self.cmd.setScissor(0, &.{scissor});
+    }
+
+    pub fn endRendering(self: *Frame) void {
+        self.cmd.endRendering();
+    }
+
+    pub fn bindPipeline(self: *Frame, pipeline: *const Pipeline) void {
+        self.cmd.bindPipeline(.graphics, pipeline.handle);
+    }
+
+    pub fn draw(self: *Frame, vertex_count: u32) void {
+        self.cmd.draw(vertex_count, 1, 0, 0);
     }
 };
 

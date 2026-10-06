@@ -1,6 +1,16 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
+const shader_files = [_][]const u8{
+    "triangle.vert",
+    "triangle.frag",
+};
+
+const ShaderCompiler = enum {
+    glslc,
+    glslangValidator,
+};
+
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
@@ -43,6 +53,8 @@ pub fn build(b: *std.Build) void {
     exe.root_module.addImport("zglfw", zglfw.module("root"));
     exe.root_module.linkLibrary(zglfw.artifact("glfw"));
 
+    // addShaders(b, exe);
+
     b.installArtifact(exe);
 
     const run_step = b.step("run", "Run the app");
@@ -60,4 +72,27 @@ pub fn build(b: *std.Build) void {
     const test_step = b.step("test", "Run tests");
     test_step.dependOn(&run_mod_tests.step);
     test_step.dependOn(&run_exe_tests.step);
+}
+
+fn addShaders(b: *std.Build, exe: *std.Build.Step.Compile) void {
+    const compiler = b.option(ShaderCompiler, "shader-compiler", "GLSL to SPIR-V compiler: glslc") orelse .glslc;
+
+    const shaders_step = b.step("shaders", "Compile GLSL shaders to SPIR-V");
+
+    for (shader_files) |shader| {
+        const run = b.addSystemCommand(&.{@tagName(compiler)});
+        switch (compiler) {
+            .glslangValidator => {
+                //run.addArg(&.{ "-V", "--target-env", "vulkan1.3" });
+                run.stdio = .inherit;
+            },
+            .glslc => {}, //run.addArg(&.{"--target-env=vulkan1.3"}),
+        }
+        run.addFileArg(b.path(b.fmt("src/shaders/{s}", .{shader})));
+        run.addArg("-o");
+        const spv = run.addOutputFileArg(b.fmt("{s}.spv", .{shader}));
+
+        shaders_step.dependOn(&run.step);
+        exe.root_module.addImport(b.fmt("{s}.spv", .{shader}), b.createModule(.{ .root_source_file = spv }));
+    }
 }
