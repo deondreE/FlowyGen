@@ -30,7 +30,7 @@ pub fn init(ctx: *const Context, desc: Desc) !Pipeline {
     defer ctx.device.destroyShaderModule(frag, null);
 
     const layout = try ctx.device.createPipelineLayout(&.{}, null);
-    defer ctx.device.destroyPipelineLayout(layout, null);
+    // defer ctx.device.destroyPipelineLayout(layout, null);
 
     const stages = [_]vk.PipelineShaderStageCreateInfo{
         .{ .stage = .{ .vertex = true }, .module = vert, .p_name = "main" },

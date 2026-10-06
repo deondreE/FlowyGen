@@ -33,11 +33,11 @@ pub fn build(b: *std.Build) void {
         }),
     });
 
-    const vulkan_sdk = b.graph.environ_map.get("VULKAN_SDK") orelse
-        if (builtin.os.tag == .windows)
-            "C:\\VulkanSDK\\1.4.357.0"
-        else
-            "/usr";
+    const vulkan_sdk = b.graph.environ_map.get("VULKAN_SDK") orelse switch (builtin.os.tag) {
+        .windows => "C:\\VulkanSDK\\1.4.304.0",
+        .macos => "/opt/homebrew", // Common for LunarG, or use "/opt/homebrew" for Brew
+        else => "/usr",
+    };
     const registry_path = b.pathJoin(&.{ vulkan_sdk, "share", "vulkan", "registry", "vk.xml" });
 
     const vulkan = b.dependency("vulkan", .{
@@ -59,6 +59,12 @@ pub fn build(b: *std.Build) void {
 
     const run_step = b.step("run", "Run the app");
     const run_cmd = b.addRunArtifact(exe);
+
+    if (builtin.os.tag == .macos) {
+        const sdk_path = "/Users/deondreenglish/VulkanSDK/1.4.328.1/macOS";
+        run_cmd.setEnvironmentVariable("VK_ICD_FILENAMES", sdk_path ++ "/share/vulkan/icd.d/MoltenVK_icd.json");
+        run_cmd.setEnvironmentVariable("DYLD_LIBRARY_PATH", sdk_path ++ "/lib");
+    }
     run_step.dependOn(&run_cmd.step);
     run_cmd.step.dependOn(b.getInstallStep());
     run_cmd.addPassthruArgs();
