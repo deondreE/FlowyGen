@@ -8,6 +8,8 @@ pub const Desc = struct {
     vert: []const u32,
     frag: []const u32,
     color_format: vk.Format,
+    vertex_stride: u32 = 0,
+    vertex_attributes: []const vk.VertexInputAttributeDescription = &.{},
 };
 
 ctx: *const Context,
@@ -48,6 +50,12 @@ pub fn init(ctx: *const Context, desc: Desc) !Pipeline {
         .color_write_mask = .{ .r = true, .g = true, .b = true, .a = true },
     };
 
+    const vertex_binding: vk.VertexInputBindingDescription = .{
+        .binding = 0,
+        .stride = desc.vertex_stride,
+        .input_rate = .vertex,
+    };
+
     const dynamic_states = [_]vk.DynamicState{ .viewport, .scissor };
 
     const rendering_info = vk.PipelineRenderingCreateInfo{
@@ -63,8 +71,10 @@ pub fn init(ctx: *const Context, desc: Desc) !Pipeline {
         .stage_count = stages.len,
         .p_stages = &stages,
         .p_vertex_input_state = &.{
-            .vertex_binding_description_count = 0,
-            .vertex_attribute_description_count = 0,
+            .vertex_binding_description_count = if (desc.vertex_stride > 0) 1 else 0,
+            .p_vertex_binding_descriptions = @ptrCast(&vertex_binding),
+            .vertex_attribute_description_count = @intCast(desc.vertex_attributes.len),
+            .p_vertex_attribute_descriptions = desc.vertex_attributes.ptr,
         },
         .p_input_assembly_state = &.{
             .topology = .triangle_list,

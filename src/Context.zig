@@ -37,6 +37,7 @@ surface: vk.SurfaceKHR,
 device: Device, // the proxy, not the raw vk.Device handle
 pdev: vk.PhysicalDevice,
 pdev_props: vk.PhysicalDeviceProperties,
+mem_props: vk.PhysicalDeviceMemoryProperties,
 queue_family: u32,
 queue: vk.Queue,
 
@@ -142,6 +143,21 @@ pub fn deinit(self: *Context) void {
 
 pub fn waitIdle(self: *const Context) void {
     self.device.deviceWaitIdle() catch {};
+}
+
+pub fn findMemoryType(self: Context, type_bits: u32, wanted: vk.MemoryPropertyFlags) !u32 {
+    const props = self.instance.getPhysicalDeviceMemoryProperties(self.pdev);
+
+    // Iterate through all available memory types (max 32 in Vulkan)
+    for (props.memory_types[0..props.memory_type_count], 0..) |mem_type, i| {
+        const bit: u5 = @intCast(i);
+        if ((type_bits >> bit) & 1 == 1) {
+            if (mem_type.property_flags.contains(wanted)) {
+                return @intCast(i);
+            }
+        }
+    }
+    return error.NoSuitableMemoryType;
 }
 
 // Physical Device Selection

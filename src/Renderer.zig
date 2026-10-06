@@ -2,8 +2,9 @@ const std = @import("std");
 const vk = @import("vulkan");
 const Context = @import("Context.zig");
 const Swapchain = @import("Swapchain.zig");
-const Window = @import("window.zig");
 const Pipeline = @import("Pipeline.zig");
+const Buffer = @import("Buffer.zig");
+const Window = @import("window.zig");
 
 const Renderer = @This();
 
@@ -52,9 +53,12 @@ pub const Frame = struct {
     pub fn clear(self: *Frame, color: [4]f32) void {
         self.transition(.transfer_dst_optimal);
         const value: vk.ClearColorValue = .{ .float_32 = color };
-        self.cmd.clearColorImage(self.image, .transfer_dst_optimal, &value, @ptrCast(&color_range));
+        self.cmd.clearColorImage(self.image, .transfer_dst_optimal, &value, &.{color_range});
     }
 
+    /// Start drawing into the swapchain image: moves it to the attachment layout,
+    /// clears it, and sets a viewport and scissor covering the whole image.
+    /// Pair with endRendering().
     pub fn beginRendering(self: *Frame, clear_color: [4]f32) void {
         self.transition(.color_attachment_optimal);
 
@@ -66,9 +70,7 @@ pub const Frame = struct {
             .resolve_image_layout = .undefined,
             .load_op = .clear,
             .store_op = .store,
-            .clear_value = .{
-                .color = .{ .float_32 = clear_color },
-            },
+            .clear_value = .{ .color = .{ .float_32 = clear_color } },
         };
         self.cmd.beginRendering(&.{
             .render_area = .{ .offset = .{ .x = 0, .y = 0 }, .extent = self.extent },
@@ -97,6 +99,10 @@ pub const Frame = struct {
 
     pub fn bindPipeline(self: *Frame, pipeline: *const Pipeline) void {
         self.cmd.bindPipeline(.graphics, pipeline.handle);
+    }
+
+    pub fn bindVertexBuffer(self: *Frame, buffer: *const Buffer) void {
+        self.cmd.bindVertexBuffers(0, &.{buffer.handle}, &.{0});
     }
 
     pub fn draw(self: *Frame, vertex_count: u32) void {
@@ -250,7 +256,7 @@ pub fn endFrame(self: *Renderer, frame: *Frame) !void {
         .signal_semaphore_count = 1,
         .p_signal_semaphores = @ptrCast(&render_done),
     };
-    try device.queueSubmit(self.ctx.queue, @ptrCast(&submit), slot.in_flight);
+    try device.queueSubmit(self.ctx.queue, &.{submit}, slot.in_flight);
 
     const result = device.queuePresentKHR(self.ctx.queue, &.{
         .wait_semaphore_count = 1,
