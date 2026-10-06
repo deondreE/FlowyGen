@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
@@ -22,7 +23,11 @@ pub fn build(b: *std.Build) void {
         }),
     });
 
-    const vulkan_sdk = b.graph.environ_map.get("VULKAN_SDK") orelse "C:\\VulkanSDK\\1.4.357.0";
+    const vulkan_sdk = b.graph.environ_map.get("VULKAN_SDK") orelse
+        if (builtin.os.tag == .windows)
+            "C:\\VulkanSDK\\1.4.357.0"
+        else
+            "/usr";
     const registry_path = b.pathJoin(&.{ vulkan_sdk, "share", "vulkan", "registry", "vk.xml" });
 
     const vulkan = b.dependency("vulkan", .{

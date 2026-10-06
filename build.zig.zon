@@ -9,8 +9,8 @@
             .hash = "vulkan-0.0.0-r7Ytx4yGAwDZf0XsT6_L1ol_XUAkyOgOyBqamf8begA0",
         },
         .zglfw = .{
-            .url = "git+https://github.com/zig-gamedev/zglfw#f04fdbfc5b6d8c9a12025013992ac1d48653931e",
-            .hash = "zglfw-0.10.0-dev-zgVDNNu5IQAk-UK7gIg0LWMmMzxj4sK9xCSTisLhjgI1",
+            .url = "git+https://github.com/deondreE/zglfw.git#ad6c9a426f4e5fd73c13f8ee5bfef63c6784793b",
+            .hash = "zglfw-0.10.0-dev-zgVDNDm8IQCBgjxGL-SPn0WZpDGRM-cx9dHPrOInfgth",
         },
     },
     .paths = .{
