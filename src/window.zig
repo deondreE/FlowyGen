@@ -1,9 +1,22 @@
 const std = @import("std");
 const glfw = @import("zglfw");
+const builtin = @import("builtin");
+
+// @Todo: threadlocal???
+const is_linux = builtin.os.tag == .linux;
+
+/// GLFW_FEATURE_UNAVAILABLE. zglfw's `ErrorCode` is a plain c_int, so there is no enum member for it.
+const glfw_feature_unavailable: glfw.ErrorCode = 0x0001000C;
 
 const Window = @This();
 
 pub const Size = struct { width: u32, height: u32 };
+
+pub const Platform = enum {
+    auto,
+    wayland,
+    x11,
+};
 
 pub const Options = struct {
     title: [:0]const u8 = "Window",
@@ -17,8 +30,11 @@ pub const Options = struct {
     close_on_escape: bool = true,
     /// F11 toggles borderless-style fullscreen on the primary monitor.
     fullscreen_hotkey: bool = true,
-    /// Called whenever the framebuffer size or content scale changes. On macOS this
-    /// also runs *during* a live resize/drag, which the normal event loop can't do.
+    /// Linux only: force a backend. `.auto` lets GLFW pick Wayland or X11 automatically.
+    platform: Platform = .auto,
+    /// Linux only: Wayland app_id / X11 class. Should match your .desktop file name
+    /// so compositors can pick the right icon and group windows.
+    app_id: [:0]const u8 = "flowygen",
     on_redraw: ?*const fn (*Window) void = null,
     /// Anything you want to reach from callbacks; read it back with `userData`.
     user_data: ?*anyopaque = null,
@@ -28,6 +44,8 @@ const Rect = struct { x: c_int, y: c_int, w: c_int, h: c_int };
 
 handle: *glfw.Window,
 resized: bool = false,
+/// Wayland forbids clients from reading or setting window position.
+is_wayland: bool = false,
 on_redraw: ?*const fn (*Window) void,
 user_data: ?*anyopaque,
 close_on_escape: bool,
@@ -38,8 +56,24 @@ windowed_rect: ?Rect = null,
 pub fn init(self: *Window, options: Options) !void {
     _ = glfw.setErrorCallback(errorCallback);
 
+    // Init hints must be set before glfw.init(). The value has to be a typed enum:
+    // zglfw's cIntCast can't convert a bare `.wayland` literal.
+    if (is_linux) {
+        switch (options.platform) {
+            .auto => {},
+            .wayland => try glfw.initHint(.platform, glfw.Platform.wayland),
+            .x11 => try glfw.initHint(.platform, glfw.Platform.x11),
+        }
+    }
+
     try glfw.init();
     errdefer glfw.terminate();
+
+    // Ask GLFW what it actually picked; `.auto` can resolve to either backend.
+    const wayland = is_linux and glfw.getPlatform() == glfw.Platform.wayland;
+    if (is_linux) {
+        std.log.info("Running on Linux with platform: {s}", .{if (wayland) "wayland" else "x11"});
+    }
 
     if (!glfw.isVulkanSupported()) {
         std.log.warn("GLFW can't find a Vulkan loader. On macOS install the Vulkan SDK (MoltenVK).", .{});
@@ -51,11 +85,18 @@ pub fn init(self: *Window, options: Options) !void {
     // Create hidden, position, then show: avoids a flash at a default position.
     glfw.windowHint(.visible, false);
 
+    if (is_linux) {
+        glfw.windowHintString(.wayland_app_id, options.app_id);
+        glfw.windowHintString(.x11_class_name, options.app_id);
+        glfw.windowHintString(.x11_instance_name, options.app_id);
+    }
+
     const handle = try glfw.createWindow(options.width, options.height, options.title, null, null);
     errdefer handle.destroy();
 
     self.* = .{
         .handle = handle,
+        .is_wayland = wayland,
         .on_redraw = options.on_redraw,
         .user_data = options.user_data,
         .close_on_escape = options.close_on_escape,
@@ -69,7 +110,8 @@ pub fn init(self: *Window, options: Options) !void {
     _ = handle.setContentScaleCallback(contentScaleCallback);
     handle.setSizeLimits(options.min_width, options.min_height, -1, -1); // -1 == GLFW_DONT_CARE
 
-    if (options.center) self.centerOnPrimaryMonitor();
+    // Wayland: the compositor owns placement; setPos would raise FEATURE_UNAVAILABLE.
+    if (options.center and !self.is_wayland) self.centerOnPrimaryMonitor();
     handle.show();
 }
 
@@ -133,13 +175,15 @@ pub fn setTitle(self: *Window, title: [:0]const u8) void {
 
 pub fn toggleFullscreen(self: *Window) void {
     if (self.windowed_rect) |r| {
+        // On Wayland x/y are ignored; the compositor restores the previous placement.
         self.handle.setMonitor(null, r.x, r.y, r.w, r.h, -1);
         self.windowed_rect = null;
         return;
     }
     const monitor = glfw.getPrimaryMonitor() orelse return;
     const mode = monitor.getVideoMode() catch return;
-    const pos = self.handle.getPos();
+    // Wayland: getPos raises FEATURE_UNAVAILABLE, so don't ask.
+    const pos: [2]c_int = if (self.is_wayland) .{ 0, 0 } else self.handle.getPos();
     const size = self.handle.getSize();
     self.windowed_rect = .{ .x = pos[0], .y = pos[1], .w = size[0], .h = size[1] };
     self.handle.setMonitor(monitor, 0, 0, mode.width, mode.height, mode.refresh_rate);
@@ -162,6 +206,12 @@ fn notifyResized(self: *Window) void {
 }
 
 fn errorCallback(code: glfw.ErrorCode, desc: ?[*:0]const u8) callconv(.c) void {
+    // Wayland deliberately lacks some features (window position, focus stealing, ...).
+    // That's expected, not a failure.
+    if (code == glfw_feature_unavailable) {
+        std.log.warn("GLFW feature unavailable: {s}", .{desc orelse "unknown"});
+        return;
+    }
     std.log.err("GLFW error {d}: {s}", .{ code, desc orelse "unknown" });
 }
 
