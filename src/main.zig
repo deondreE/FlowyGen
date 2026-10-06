@@ -2,28 +2,41 @@ const std = @import("std");
 const Io = std.Io;
 
 const Window = @import("window.zig");
+const Context = @import("Context.zig");
+const Swapchain = @import("Swapchain.zig");
+const Renderer = @import("Renderer.zig");
 const flowygen = @import("flowygen");
 
 const App = struct {
     frame: u64 = 0,
+    renderer: ?*Renderer = null,
 };
+
+fn drawFrame(window: *Window, app: *App) !void {
+    const renderer = app.renderer orelse return;
+
+    var frame = (try renderer.beginFrame(window)) orelse return;
+
+    const t: f32 = @floatFromInt(app.frame);
+    const pulse = 0.5 + 0.5 * @sin(t * 0.00015);
+    frame.clear(.{ 0.04, 0.06 + 0.06 * pulse, 0.12 + 0.10 * pulse, 1.0 });
+
+    try renderer.endFrame(&frame);
+    app.frame += 1;
+}
 
 fn redraw(window: *Window) void {
     if (window.isMinimized()) return;
     const app = window.userData(App) orelse return;
 
-    if (window.takeResized()) {
-        const fb = window.framebufferSize();
-        std.log.info("Framebuffer resized to {d}x{d}", .{ fb.width, fb.height });
-        // @Todo: recreate the swapchain here.
-    }
-
-    // @Todo: aquire, record, present
-    app.frame += 1;
+    drawFrame(window, app) catch |err| {
+        std.log.err("Failed to draw frame: {}", .{err});
+        window.close();
+    };
 }
 
 pub fn main(init: std.process.Init) !void {
-    _ = init;
+    const gpa = init.gpa;
 
     var app: App = .{};
     var window: Window = undefined;
@@ -35,6 +48,17 @@ pub fn main(init: std.process.Init) !void {
         .user_data = &app,
     });
     defer window.deinit();
+
+    var context: Context = try Context.init(gpa, "FlowyGen", &window);
+    defer context.deinit();
+
+    var swapchain: Swapchain = try Swapchain.init(&context, gpa, &window);
+    defer swapchain.deinit();
+
+    var renderer: Renderer = try Renderer.init(&context, &swapchain);
+    defer renderer.deinit();
+
+    app.renderer = &renderer;
 
     while (!window.shouldClose()) {
         window.pollEvents();
