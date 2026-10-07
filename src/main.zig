@@ -24,17 +24,6 @@ const vertices = [_]Vertex{
     .{ .pos = .{ -0.5, 0.5 }, .color = .{ 0, 0, 1 } },
 };
 
-const vertex_attributes = [_]Buffer.VertexAttribute{
-    .{ .location = 0, .binding = 0, .format = .r32g32_sfloat, .offset = @offsetOf(Vertex, "pos") },
-    .{ .location = 1, .binding = 0, .format = .r32g32b32_sfloat, .offset = @offsetOf(Vertex, "color") },
-};
-
-const RotatePush = extern struct {
-    dt: f32,
-};
-
-const compute_local_size = 64;
-
 const App = struct {
     time: Time,
     frame: u64 = 0,
