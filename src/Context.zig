@@ -29,6 +29,8 @@ const instance_flags: vk.InstanceCreateFlags = if (is_macos) @bitCast(@as(u32, 0
 const swapchain_ext = "VK_KHR_swapchain";
 const portability_instance_ext = "VK_KHR_portability_enumeration";
 const portability_device_ext = "VK_KHR_portability_subset";
+const validation_layer: [*:0]const u8 = "VK_LAYER_KHRONOS_validation";
+const enable_validation_layer = builtin.mode == .debug;
 
 allocator: Allocator,
 vkb: BaseWrapper,
@@ -61,6 +63,18 @@ pub fn init(allocator: Allocator, app_name: [*:0]const u8, window: *Window) !Con
         ext_count += 1;
     }
 
+    var layers: [1][*:0]const u8 = undefined;
+    var layer_count: u32 = 0;
+    if (enable_validation_layer) {
+        if (try hasLayer(allocator, self.vkb, validation_layer)) {
+            layers[0] = validation_layer;
+            layer_count = 1;
+            std.log.info("Vulkan validation layer enabled", .{});
+        } else {
+            std.log.warn("Validation layer request but not supported", .{});
+        }
+    }
+
     const instance_handle = try self.vkb.createInstance(&.{
         .flags = instance_flags,
         .p_application_info = &.{
@@ -70,6 +84,8 @@ pub fn init(allocator: Allocator, app_name: [*:0]const u8, window: *Window) !Con
             .engine_version = @bitCast(vk.makeApiVersion(0, 0, 1, 0)),
             .api_version = @bitCast(vk.API_VERSION_1_3),
         },
+        .enabled_layer_count = layer_count,
+        .pp_enabled_layer_names = &layers,
         .enabled_extension_count = @intCast(ext_count),
         .pp_enabled_extension_names = &exts,
     }, null);
@@ -166,6 +182,15 @@ const Pick = struct {
     props: vk.PhysicalDeviceProperties,
     queue_family: u32,
 };
+
+fn hasLayer(allocator: Allocator, vkb: BaseWrapper, name: [*:0]const u8) !bool {
+    const props = try vkb.enumerateInstanceLayerPropertiesAlloc(allocator);
+    defer allocator.free(props);
+    for (props) |p| {
+        if (std.mem.eql(u8, std.mem.sliceTo(&p.layer_name, 0), std.mem.span(name))) return true;
+    }
+    return false;
+}
 
 fn pickPhysicalDevice(allocator: Allocator, instance: Instance, surface: vk.SurfaceKHR) !Pick {
     const pdevs = try instance.enumeratePhysicalDevicesAlloc(allocator);

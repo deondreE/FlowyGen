@@ -6,7 +6,9 @@ const Context = @import("Context.zig");
 const Swapchain = @import("Swapchain.zig");
 const Renderer = @import("Renderer.zig");
 const Pipeline = @import("Pipeline.zig");
+const ComputePipeline = @import("ComputePipeline.zig");
 const Buffer = @import("Buffer.zig");
+const Time = @import("Time.zig");
 const flowygen = @import("flowygen");
 
 // We are going to need a true concept of delta.
@@ -22,11 +24,24 @@ const vertices = [_]Vertex{
     .{ .pos = .{ -0.5, 0.5 }, .color = .{ 0, 0, 1 } },
 };
 
+const vertex_attributes = [_]Buffer.VertexAttribute{
+    .{ .location = 0, .binding = 0, .format = .r32g32_sfloat, .offset = @offsetOf(Vertex, "pos") },
+    .{ .location = 1, .binding = 0, .format = .r32g32b32_sfloat, .offset = @offsetOf(Vertex, "color") },
+};
+
+const RotatePush = extern struct {
+    dt: f32,
+};
+
+const compute_local_size = 64;
+
 const App = struct {
+    time: Time,
     frame: u64 = 0,
     renderer: ?*Renderer = null,
     pipeline: ?*Pipeline = null,
     vertex_buffer: ?*Buffer = null,
+    fps_log_timer: f64 = 0,
 };
 
 fn drawFrame(window: *Window, app: *App) !void {
@@ -34,10 +49,18 @@ fn drawFrame(window: *Window, app: *App) !void {
     const pipeline = app.pipeline orelse return;
     const vertex_buffer = app.vertex_buffer orelse return;
 
+    app.time.tick();
+    // const dt = app.time.delta;
+
+    app.fps_log_timer += app.time.raw_delta;
+    if (app.fps_log_timer >= 1.0) {
+        app.fps_log_timer = 0;
+        std.log.info("FPS: {d}", .{app.time.fps()});
+    }
+
     var frame = (try renderer.beginFrame(window)) orelse return;
 
-    const t: f32 = @floatFromInt(app.frame);
-    const pulse = 0.5 + 0.5 * @sin(t * 0.00015);
+    const pulse = 0.5 + 0.5 * @as(f32, @floatCast(app.time.elapsed * 0.5));
 
     frame.beginRendering(.{ 0.04, 0.06 + 0.06 * pulse, 0.12 + 0.10 * pulse, 1.0 });
     frame.bindPipeline(pipeline);
@@ -62,7 +85,9 @@ fn redraw(window: *Window) void {
 pub fn main(init: std.process.Init) !void {
     const gpa = init.gpa;
 
-    var app: App = .{};
+    var app: App = .{
+        .time = Time.init(),
+    };
     var window: Window = undefined;
     try window.init(.{
         .title = "FlowyGen",
@@ -79,7 +104,7 @@ pub fn main(init: std.process.Init) !void {
     var swapchain: Swapchain = try Swapchain.init(&context, gpa, &window);
     defer swapchain.deinit();
 
-    var vertex_buffer: Buffer = try Buffer.fromSlice(&context, Vertex, &vertices, .{ .vertex_buffer = true });
+    var vertex_buffer: Buffer = try Buffer.fromSlice(&context, Vertex, &vertices, .{ .vertex_buffer = true, .storage_buffer = true });
     defer vertex_buffer.deinit();
 
     var pipeline: Pipeline = try Pipeline.init(&context, .{
