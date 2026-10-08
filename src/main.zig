@@ -9,7 +9,11 @@ const Pipeline = @import("Pipeline.zig");
 const ComputePipeline = @import("ComputePipeline.zig");
 const Buffer = @import("Buffer.zig");
 const Time = @import("Time.zig");
+const TextRenderer = @import("TextRenderer.zig");
+const Font = @import("stb_zig.zig").Font;
 const flowygen = @import("flowygen");
+
+const font_data = @embedFile("fonts/Roboto.ttf");
 
 const Vertex = extern struct {
     pos: [2]f32,
@@ -46,6 +50,7 @@ const App = struct {
     ui_pipeline: ?*Pipeline = null,
     vertex_buffer: ?*Buffer = null,
     ui_buffer: ?*Buffer = null,
+    text: ?*TextRenderer = null,
     fps_log_timer: f64 = 0,
 };
 
@@ -55,6 +60,7 @@ fn drawFrame(window: *Window, app: *App) !void {
     const ui_pipeline = app.ui_pipeline orelse return;
     const vertex_buffer = app.vertex_buffer orelse return;
     const ui_buffer = app.ui_buffer orelse return;
+    const text = app.text orelse return;
 
     app.time.tick();
     // const dt = app.time.delta;
@@ -80,6 +86,12 @@ fn drawFrame(window: *Window, app: *App) !void {
     frame.bindPipeline(ui_pipeline);
     frame.bindVertexBuffer(ui_buffer);
     frame.draw(ui_vertices.len);
+
+    const fb = window.framebufferSize();
+    text.begin(app.frame);
+    text.draw(24, 22, "FlowyGen", .{ 235, 240, 255, 255 });
+    text.print(24, 22 + text.line_height, .{ 150, 170, 210, 255 }, "FPS {d:.0}", .{app.time.fps()});
+    try text.record(&frame, @floatFromInt(fb.width), @floatFromInt(fb.height));
 
     frame.endRendering();
 
@@ -145,6 +157,10 @@ pub fn main(init: std.process.Init) !void {
     );
     defer ui_pipeline.deinit();
 
+    var font: Font = try Font.init(font_data);
+    var text: TextRenderer = try TextRenderer.init(&context, gpa, swapchain.format, &font, 24, 4096);
+    defer text.deinit();
+
     var renderer: Renderer = try Renderer.init(&context, &swapchain);
     defer renderer.deinit();
 
@@ -153,6 +169,7 @@ pub fn main(init: std.process.Init) !void {
     app.vertex_buffer = &vertex_buffer;
     app.ui_pipeline = &ui_pipeline;
     app.ui_buffer = &ui_buffer;
+    app.text = &text;
 
     while (!window.shouldClose()) {
         window.pollEvents();

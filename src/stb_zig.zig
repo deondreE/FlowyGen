@@ -28,6 +28,7 @@ pub const GlyphBitmap = struct {
 pub const Font = struct {
     info: stb.stbtt_fontinfo,
 
+    /// `font_data` must outlive the Font (stb keeps a pointer into it).
     pub fn init(font_data: []const u8) FontError!Font {
         var info: stb.stbtt_fontinfo = undefined;
         if (stb.stbtt_InitFont(&info, font_data.ptr, 0) == 0) {
@@ -54,15 +55,24 @@ pub const Font = struct {
         return stb.stbtt_ScaleForPixelHeight(&self.info, height_pixels);
     }
 
-    /// Safley return UTF-8 character or codepoint interal glyph index
+    /// Safely return the font's internal glyph index for a codepoint.
     pub fn findGlyphIndex(self: *const Font, codepoint: u21) FontError!u32 {
         const idx = stb.stbtt_FindGlyphIndex(&self.info, @intCast(codepoint));
         if (idx == 0) return FontError.GlyphNotFound;
         return @intCast(idx);
     }
 
-    /// Allocates and renders an alpha-only bitmap for a specific character
-    /// returns native types and leverages Zig's Allocator for memory safety.
+    /// Unscaled horizontal advance of a codepoint (multiply by the scale factor).
+    pub fn getAdvance(self: *const Font, codepoint: u21) i32 {
+        var advance: c_int = 0;
+        var left_bearing: c_int = 0;
+        stb.stbtt_GetCodepointHMetrics(&self.info, @intCast(codepoint), &advance, &left_bearing);
+        return @intCast(advance);
+    }
+
+    /// Allocates and renders an alpha-only bitmap for a specific character,
+    /// returning native types and leveraging Zig's Allocator for memory safety.
+    /// Glyphs with no outline (e.g. space) return a 0x0 bitmap instead of an error.
     pub fn renderGlyphBitmap(
         self: *const Font,
         allocator: std.mem.Allocator,
@@ -85,8 +95,16 @@ pub const Font = struct {
             &y_offset,
         );
 
-        if (c_pixels == null) {
-            return FontError.GlyphNotFound;
+        // stb returns NULL for empty glyphs such as space.
+        if (c_pixels == null or width <= 0 or height <= 0) {
+            if (c_pixels != null) stb.stbtt_FreeBitmap(c_pixels, null);
+            return .{
+                .width = 0,
+                .height = 0,
+                .x_offset = 0,
+                .y_offset = 0,
+                .pixels = try allocator.alloc(u8, 0),
+            };
         }
         defer stb.stbtt_FreeBitmap(c_pixels, null);
 

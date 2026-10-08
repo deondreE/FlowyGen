@@ -18,7 +18,7 @@ pub fn build(b: *std.Build) void {
 
     const translator_c_dep = b.dependency("translate_c", .{});
     const stb_translator: Translator = .init(translator_c_dep, .{
-        .c_source_file = b.path("src/stb_impl.c"),
+        .c_source_file = b.path("src/stb_truetype.h"),
         .target = target,
         .optimize = optimize,
     });
@@ -31,6 +31,10 @@ pub fn build(b: *std.Build) void {
         .imports = &.{
             .{ .name = "stb", .module = stb_translator.mod },
         },
+    });
+    mod.addCSourceFile(.{
+        .file = b.path("src/stb_impl.c"),
+        .flags = &.{"-fno-sanitize=undefined"},
     });
 
     const exe = b.addExecutable(.{

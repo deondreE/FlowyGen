@@ -105,6 +105,14 @@ pub const Frame = struct {
         self.cmd.bindVertexBuffers(0, &.{buffer.handle}, &.{0});
     }
 
+    pub fn bindDescriptorSets(self: *Frame, pipeline: *const Pipeline, set: vk.DescriptorSet) void {
+        self.cmd.bindDescriptorSets(.graphics, pipeline.layout, 0, @ptrCast(&set), null);
+    }
+
+    pub fn pushConstants(self: *Frame, pipeline: *const Pipeline, stages: vk.ShaderStageFlags, comptime T: type, value: *const T) void {
+        self.cmd.pushConstants(pipeline.layout, stages, 0, @sizeOf(T), value);
+    }
+
     pub fn draw(self: *Frame, vertex_count: u32) void {
         self.cmd.draw(vertex_count, 1, 0, 0);
     }
