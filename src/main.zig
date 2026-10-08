@@ -11,8 +11,6 @@ const Buffer = @import("Buffer.zig");
 const Time = @import("Time.zig");
 const flowygen = @import("flowygen");
 
-// We are going to need a true concept of delta.
-
 const Vertex = extern struct {
     pos: [2]f32,
     color: [3]f32,
@@ -24,19 +22,39 @@ const vertices = [_]Vertex{
     .{ .pos = .{ -0.5, 0.5 }, .color = .{ 0, 0, 1 } },
 };
 
+const UIVertex = extern struct {
+    pos: [2]f32,
+    color: [4]u8,
+};
+
+// @Todo: Remove this later
+const panel_color = [4]u8{ 20, 24, 40, 170 };
+const ui_vertices = [_]UIVertex{
+    .{ .pos = .{ -0.95, -0.95 }, .color = panel_color },
+    .{ .pos = .{ -0.45, -0.95 }, .color = panel_color },
+    .{ .pos = .{ -0.45, -0.60 }, .color = panel_color },
+    .{ .pos = .{ -0.95, -0.95 }, .color = panel_color },
+    .{ .pos = .{ -0.45, -0.60 }, .color = panel_color },
+    .{ .pos = .{ -0.95, -0.60 }, .color = panel_color },
+};
+
 const App = struct {
     time: Time,
     frame: u64 = 0,
     renderer: ?*Renderer = null,
-    pipeline: ?*Pipeline = null,
+    scene_pipeline: ?*Pipeline = null,
+    ui_pipeline: ?*Pipeline = null,
     vertex_buffer: ?*Buffer = null,
+    ui_buffer: ?*Buffer = null,
     fps_log_timer: f64 = 0,
 };
 
 fn drawFrame(window: *Window, app: *App) !void {
     const renderer = app.renderer orelse return;
-    const pipeline = app.pipeline orelse return;
+    const scene_pipeline = app.scene_pipeline orelse return;
+    const ui_pipeline = app.ui_pipeline orelse return;
     const vertex_buffer = app.vertex_buffer orelse return;
+    const ui_buffer = app.ui_buffer orelse return;
 
     app.time.tick();
     // const dt = app.time.delta;
@@ -52,9 +70,17 @@ fn drawFrame(window: *Window, app: *App) !void {
     const pulse = 0.5 + 0.5 * @as(f32, @floatCast(app.time.elapsed * 0.5));
 
     frame.beginRendering(.{ 0.04, 0.06 + 0.06 * pulse, 0.12 + 0.10 * pulse, 1.0 });
-    frame.bindPipeline(pipeline);
+
+    // Scene
+    frame.bindPipeline(scene_pipeline);
     frame.bindVertexBuffer(vertex_buffer);
     frame.draw(3);
+
+    // UI
+    frame.bindPipeline(ui_pipeline);
+    frame.bindVertexBuffer(ui_buffer);
+    frame.draw(ui_vertices.len);
+
     frame.endRendering();
 
     try renderer.endFrame(&frame);
@@ -96,19 +122,37 @@ pub fn main(init: std.process.Init) !void {
     var vertex_buffer: Buffer = try Buffer.fromSlice(&context, Vertex, &vertices, .{ .vertex_buffer = true, .storage_buffer = true });
     defer vertex_buffer.deinit();
 
-    var pipeline: Pipeline = try Pipeline.init(&context, .{
-        .vert = Pipeline.embedSpirv("shaders/triangle.vert.spv"),
-        .frag = Pipeline.embedSpirv("shaders/triangle.frag.spv"),
-        .color_format = swapchain.format,
-    });
-    defer pipeline.deinit();
+    var ui_buffer: Buffer = try Buffer.fromSlice(&context, UIVertex, &ui_vertices, .{ .vertex_buffer = true });
+    defer ui_buffer.deinit();
+
+    var scene_pipeline: Pipeline = try Pipeline.init(
+        &context,
+        (Pipeline.Desc{
+            .vert = Pipeline.embedSpirv("shaders/triangle.vert.spv"),
+            .frag = Pipeline.embedSpirv("shaders/triangle.frag.spv"),
+            .color_format = swapchain.format,
+        }).withVertex(Vertex, &.{ "pos", "color" }),
+    );
+    defer scene_pipeline.deinit();
+
+    var ui_pipeline: Pipeline = try Pipeline.init(
+        &context,
+        Pipeline.Desc.ui(
+            Pipeline.embedSpirv("shaders/ui.vert.spv"),
+            Pipeline.embedSpirv("shaders/ui.frag.spv"),
+            swapchain.format,
+        ).withVertex(UIVertex, &.{ "pos", "color" }),
+    );
+    defer ui_pipeline.deinit();
 
     var renderer: Renderer = try Renderer.init(&context, &swapchain);
     defer renderer.deinit();
 
     app.renderer = &renderer;
-    app.pipeline = &pipeline;
+    app.scene_pipeline = &scene_pipeline;
     app.vertex_buffer = &vertex_buffer;
+    app.ui_pipeline = &ui_pipeline;
+    app.ui_buffer = &ui_buffer;
 
     while (!window.shouldClose()) {
         window.pollEvents();
