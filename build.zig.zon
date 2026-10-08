@@ -12,6 +12,10 @@
             .url = "git+https://github.com/deondreE/zglfw.git#ad6c9a426f4e5fd73c13f8ee5bfef63c6784793b",
             .hash = "zglfw-0.10.0-dev-zgVDNDm8IQCBgjxGL-SPn0WZpDGRM-cx9dHPrOInfgth",
         },
+        .translate_c = .{
+            .url = "git+https://codeberg.org/ziglang/translate-c#875969d3493e245e01bf5d7860f792d8f3eb9ef5",
+            .hash = "translate_c-0.0.0-Q_BUWoFOBwAhz77Zd15HCVuhTKzdUKc94kezmCeJ7IC_",
+        },
     },
     .paths = .{
         "build.zig",

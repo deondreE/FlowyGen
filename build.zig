@@ -1,5 +1,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
+const Translator = @import("translate_c").Translator;
 
 const shader_files = [_][]const u8{
     "triangle.vert",
@@ -15,10 +16,21 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
+    const translator_c_dep = b.dependency("translate_c", .{});
+    const stb_translator: Translator = .init(translator_c_dep, .{
+        .c_source_file = b.path("src/stb_impl.c"),
+        .target = target,
+        .optimize = optimize,
+    });
+
     const mod = b.addModule("flowygen", .{
         .root_source_file = b.path("src/root.zig"),
         .target = target,
         .optimize = optimize,
+        .link_libc = true,
+        .imports = &.{
+            .{ .name = "stb", .module = stb_translator.mod },
+        },
     });
 
     const exe = b.addExecutable(.{
@@ -29,10 +41,10 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
             .imports = &.{
                 .{ .name = "flowygen", .module = mod },
+                .{ .name = "stb", .module = stb_translator.mod },
             },
         }),
     });
-
     const vulkan_sdk = b.graph.environ_map.get("VULKAN_SDK") orelse switch (builtin.os.tag) {
         .windows => "C:\\VulkanSDK\\1.4.304.0",
         .macos => "/opt/homebrew", // Common for LunarG, or use "/opt/homebrew" for Brew
