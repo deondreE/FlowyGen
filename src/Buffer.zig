@@ -64,6 +64,12 @@ pub fn fromSlice(
     return self;
 }
 
+pub fn mappedSlice(self: *const Buffer, comptime T: type) ![]T {
+    const base = self.mapped orelse return error.NotVisibleHost;
+    const ptr: [*]T = @ptrCast(@alignCast(base));
+    return ptr[0 .. self.size / @sizeOf(T)];
+}
+
 pub fn deinit(self: *Buffer) void {
     if (self.mapped != null) self.ctx.device.unmapMemory(self.memory);
     self.ctx.device.destroyBuffer(self.handle, null);

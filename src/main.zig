@@ -172,6 +172,11 @@ pub fn main(init: std.process.Init) !void {
     app.text = &text;
 
     while (!window.shouldClose()) {
+        if (window.isMinimized()) {
+            window.waitEvents();
+            continue;
+        }
+
         window.pollEvents();
         redraw(&window);
     }

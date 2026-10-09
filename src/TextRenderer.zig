@@ -41,7 +41,7 @@ const Glyph = struct {
 ctx: *const Context,
 allocator: Allocator,
 atlas: Texture,
-glyphs: [last_char + 1]Glyph,
+glyphs: [256]Glyph,
 /// Distance from the top of a line to its baseline, in pixels.
 ascent: f32,
 line_height: f32,
@@ -55,6 +55,8 @@ buffers: [frames_in_flight]Buffer,
 verts: []Vertex,
 count: usize,
 slot: usize,
+
+mapped: [frames_in_flight][]Vertex,
 
 pub fn init(
     ctx: *const Context,
@@ -72,7 +74,7 @@ pub fn init(
     defer allocator.free(pixels);
     @memset(pixels, 0);
 
-    var glyphs: [last_char + 1]Glyph = @splat(.{});
+    var glyphs: [256]Glyph = @splat(.{});
     const atlas_f: f32 = @floatFromInt(atlas_size);
 
     var x: usize = 1;
@@ -114,6 +116,11 @@ pub fn init(
 
         x += w + 1;
         row_h = @max(row_h, h);
+    }
+
+    const fallback = glyphs['?'];
+    for (&glyphs, 0..) |*g, i| {
+        if (i < first_char or i > last_char) g.* = fallback;
     }
 
     var atlas = try Texture.initR8(ctx, atlas_size, atlas_size, pixels);
@@ -190,10 +197,13 @@ pub fn init(
     errdefer allocator.free(verts);
 
     var buffers: [frames_in_flight]Buffer = undefined;
+    var mapped: [frames_in_flight][]Vertex = undefined;
     var made: usize = 0;
     errdefer for (buffers[0..made]) |*b| b.deinit();
     while (made < frames_in_flight) : (made += 1) {
         buffers[made] = try Buffer.init(ctx, max_vertices * @sizeOf(Vertex), .{ .vertex_buffer = true }, .host);
+        errdefer buffers[made].deinit();
+        mapped[made] = try buffers[made].mappedSlice(Vertex);
     }
 
     const ascent_px = @as(f32, @floatFromInt(metrics.ascent)) * scale;
@@ -213,6 +223,7 @@ pub fn init(
         .pipeline = pipeline,
         .buffers = buffers,
         .verts = verts,
+        .mapped = mapped,
         .count = 0,
         .slot = 0,
     };
