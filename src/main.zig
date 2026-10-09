@@ -11,8 +11,10 @@ const Buffer = @import("Buffer.zig");
 const Time = @import("Time.zig");
 const TextRenderer = @import("TextRenderer.zig");
 const Font = @import("stb_zig.zig").Font;
+const Particles = @import("Particles.zig");
 const flowygen = @import("flowygen");
 
+const particle_count = 100_000;
 const font_data = @embedFile("fonts/Roboto.ttf");
 
 const Vertex = extern struct {
@@ -51,6 +53,7 @@ const App = struct {
     vertex_buffer: ?*Buffer = null,
     ui_buffer: ?*Buffer = null,
     text: ?*TextRenderer = null,
+    particles: ?*Particles = null,
     fps_log_timer: f64 = 0,
 };
 
@@ -61,9 +64,10 @@ fn drawFrame(window: *Window, app: *App) !void {
     const vertex_buffer = app.vertex_buffer orelse return;
     const ui_buffer = app.ui_buffer orelse return;
     const text = app.text orelse return;
+    const particles = app.particles orelse return;
 
     app.time.tick();
-    // const dt = app.time.delta;
+    const dt: f32 = @floatCast(app.time.delta);
 
     app.fps_log_timer += app.time.raw_delta;
     if (app.fps_log_timer >= 1.0) {
@@ -73,6 +77,8 @@ fn drawFrame(window: *Window, app: *App) !void {
 
     var frame = (try renderer.beginFrame(window)) orelse return;
 
+    particles.update(&frame, dt, @floatCast(app.time.elapsed));
+
     const pulse = 0.5 + 0.5 * @as(f32, @floatCast(app.time.elapsed * 0.5));
 
     frame.beginRendering(.{ 0.04, 0.06 + 0.06 * pulse, 0.12 + 0.10 * pulse, 1.0 });
@@ -81,6 +87,9 @@ fn drawFrame(window: *Window, app: *App) !void {
     frame.bindPipeline(scene_pipeline);
     frame.bindVertexBuffer(vertex_buffer);
     frame.draw(3);
+
+    // Particles
+    particles.draw(&frame);
 
     // UI
     frame.bindPipeline(ui_pipeline);
@@ -161,6 +170,9 @@ pub fn main(init: std.process.Init) !void {
     var text: TextRenderer = try TextRenderer.init(&context, gpa, swapchain.format, &font, 24, 4096);
     defer text.deinit();
 
+    var particles: Particles = try Particles.init(&context, swapchain.format, particle_count);
+    defer particles.deinit();
+
     var renderer: Renderer = try Renderer.init(&context, &swapchain);
     defer renderer.deinit();
 
@@ -170,6 +182,7 @@ pub fn main(init: std.process.Init) !void {
     app.ui_pipeline = &ui_pipeline;
     app.ui_buffer = &ui_buffer;
     app.text = &text;
+    app.particles = &particles;
 
     while (!window.shouldClose()) {
         if (window.isMinimized()) {
