@@ -113,6 +113,14 @@ pub const Frame = struct {
         self.cmd.pushConstants(pipeline.layout, stages, 0, @sizeOf(T), value);
     }
 
+    pub fn bindIndexBuffer(self: *Frame, buffer: *const Buffer) void {
+        self.cmd.bindIndexBuffer(buffer.handle, 0, .uint32);
+    }
+
+    pub fn drawIndexed(self: *Frame, index_count: u32) void {
+        self.cmd.drawIndexed(index_count, 1, 0, 0, 0);
+    }
+
     pub fn draw(self: *Frame, vertex_count: u32) void {
         self.cmd.draw(vertex_count, 1, 0, 0);
     }
