@@ -69,6 +69,12 @@ pub fn build(b: *std.Build) void {
     exe.root_module.addImport("zglfw", zglfw.module("root"));
     exe.root_module.linkLibrary(zglfw.artifact("glfw"));
 
+    const lua_dep = b.dependency("zlua", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    exe.root_module.addImport("zlua", lua_dep.module("zlua"));
+
     // addShaders(b, exe);
 
     b.installArtifact(exe);

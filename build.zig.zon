@@ -16,6 +16,10 @@
             .url = "git+https://codeberg.org/ziglang/translate-c#875969d3493e245e01bf5d7860f792d8f3eb9ef5",
             .hash = "translate_c-0.0.0-Q_BUWoFOBwAhz77Zd15HCVuhTKzdUKc94kezmCeJ7IC_",
         },
+        .zlua = .{
+            .url = "git+https://github.com/natecraddock/ziglua#8b2c14e0f9f89a9407dd7dd91752c7d8fd03cb62",
+            .hash = "zlua-0.1.0-hGRpC8yYBQAtI5hy60lb1vK9Tc7s-Ouu0aMFe2Kdc3_s",
+        },
     },
     .paths = .{
         "build.zig",
