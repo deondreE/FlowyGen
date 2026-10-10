@@ -1,0 +1,329 @@
+#version 450
+
+// 2D FLIP/PIC fluid on a MAC grid. One shader, several passes selected by
+// pc.mode. The CPU dispatches them in order with a barrier between each.
+//
+// Units: the grid cell is 1.0 long, so positions are in cells, velocities in
+// cells/second, gravity in cells/second^2. +y points DOWN (same as Vulkan clip
+// space), so gravity is positive.
+//
+// Grid layout (W x H cells):
+//   cell (i,j)          centre at (i+0.5, j+0.5)
+//   u face (i,j)        i in [0,W], j in [0,H)   at (i,     j+0.5)  x velocity
+//   v face (i,j)        i in [0,W), j in [0,H]   at (i+0.5, j    )  y velocity
+// Border cells are solid walls. A cell is fluid if a particle is inside it,
+// otherwise air.
+
+layout(local_size_x = 64) in;
+
+struct Particle {
+    vec2 pos;
+    vec2 vel;
+};
+
+layout(std430, set = 0, binding = 0) buffer Particles { Particle particles[]; };
+
+// u faces first (NU floats), then v faces (NV floats).
+layout(std430, set = 0, binding = 1) buffer Vel { float vel[]; };
+
+// Grid velocity as it was after P2G (before gravity + projection). FLIP needs it.
+layout(std430, set = 0, binding = 2) buffer OldVel { float old_vel[]; };
+
+// Fixed-point accumulation for P2G (float atomics need an extension).
+//   acc[2*f]     = sum(weight * velocity) * FIX   for face f (same index as vel[])
+//   acc[2*f + 1] = sum(weight) * FIX
+//   acc[2*(NU+NV) + cell] = number of particles in the cell
+layout(std430, set = 0, binding = 3) buffer Acc { int acc[]; };
+
+layout(push_constant) uniform Push {
+    float dt;
+    float gravity;
+    float flip_ratio; // 0 = pure PIC (damped), 1 = pure FLIP (noisy)
+    float stiffness;  // strength of the density correction
+    float drop_speed; // initial downward speed of the drop, cells/s
+    uint w;
+    uint h;
+    uint mode;
+    uint n;           // work items for this dispatch
+    uint np;          // particle count
+    uint arg;         // init: pool depth in cells. solve: colour (0/1)
+    uint pool_count;  // particles in the pool (the drop's come after them)
+    uint drop_d;      // drop diameter in cells
+    uint drop_x;      // drop bounding-square origin (cells)
+    uint drop_y;
+} pc;
+
+const uint MODE_INIT      = 0u;
+const uint MODE_CLEAR     = 1u;
+const uint MODE_P2G       = 2u;
+const uint MODE_NORMALIZE = 3u;
+const uint MODE_SOLVE     = 4u;
+const uint MODE_G2P       = 5u;
+
+const float FIX        = 65536.0;
+const float OMEGA      = 1.9;   // SOR over-relaxation for the pressure solve
+const float REST_COUNT = 4.0;   // particles per cell at rest (matches 2x2 init)
+const float MAX_SPEED  = 120.0; // cells/s, keeps a step under ~1 cell at dt=1/120
+const float WALL_EPS   = 0.01;
+
+// ---------------------------------------------------------------- indexing
+
+uint NU() { return (pc.w + 1u) * pc.h; }
+uint NV() { return pc.w * (pc.h + 1u); }
+
+// comp 0 = u faces, comp 1 = v faces
+ivec2 dimsOf(uint comp) {
+    return comp == 0u ? ivec2(pc.w + 1u, pc.h) : ivec2(pc.w, pc.h + 1u);
+}
+
+vec2 offsetOf(uint comp) {
+    return comp == 0u ? vec2(0.0, 0.5) : vec2(0.5, 0.0);
+}
+
+bool inRange(uint comp, ivec2 c) {
+    ivec2 d = dimsOf(comp);
+    return c.x >= 0 && c.y >= 0 && c.x < d.x && c.y < d.y;
+}
+
+uint faceIndex(uint comp, ivec2 c) {
+    uint base = comp == 0u ? 0u : NU();
+    return base + uint(c.y) * uint(dimsOf(comp).x) + uint(c.x);
+}
+
+uint countIndex(ivec2 c) {
+    return 2u * (NU() + NV()) + uint(c.y) * pc.w + uint(c.x);
+}
+
+bool isSolid(ivec2 c) {
+    return c.x <= 0 || c.y <= 0 || c.x >= int(pc.w) - 1 || c.y >= int(pc.h) - 1;
+}
+
+bool isFluid(ivec2 c) {
+    return !isSolid(c) && acc[countIndex(c)] > 0;
+}
+
+bool isAir(ivec2 c) {
+    return !isSolid(c) && acc[countIndex(c)] == 0;
+}
+
+// Faces on the border (and the one just inside it) carry no flow.
+bool isWallFace(uint comp, ivec2 c) {
+    if (comp == 0u) return c.x <= 1 || c.x >= int(pc.w) - 1;
+    return c.y <= 1 || c.y >= int(pc.h) - 1;
+}
+
+// A face is trustworthy if at least one neighbouring cell is not air.
+bool faceValid(uint comp, ivec2 c) {
+    ivec2 a = comp == 0u ? c + ivec2(-1, 0) : c + ivec2(0, -1);
+    return !isAir(a) || !isAir(c);
+}
+
+// ---------------------------------------------------------------- random
+
+uint pcg(uint v) {
+    uint s = v * 747796405u + 2891336053u;
+    uint wd = ((s >> ((s >> 28u) + 4u)) ^ s) * 277803737u;
+    return (wd >> 22u) ^ wd;
+}
+
+float next(inout uint state) {
+    state = pcg(state);
+    return float(state >> 8) * (1.0 / 16777216.0);
+}
+
+// ---------------------------------------------------------------- transfers
+
+void splat(vec2 pos, uint comp, float value) {
+    vec2 g = pos - offsetOf(comp);
+    ivec2 b = ivec2(floor(g));
+    vec2 f = g - vec2(b);
+
+    for (int dy = 0; dy < 2; dy++) {
+        for (int dx = 0; dx < 2; dx++) {
+            ivec2 c = b + ivec2(dx, dy);
+            if (!inRange(comp, c)) continue;
+            float wx = dx == 0 ? 1.0 - f.x : f.x;
+            float wy = dy == 0 ? 1.0 - f.y : f.y;
+            float wt = wx * wy;
+            uint a = 2u * faceIndex(comp, c);
+            atomicAdd(acc[a],      int(round(value * wt * FIX)));
+            atomicAdd(acc[a + 1u], int(round(wt * FIX)));
+        }
+    }
+}
+
+float gather(vec2 pos, uint comp, bool use_old) {
+    vec2 g = pos - offsetOf(comp);
+    ivec2 b = ivec2(floor(g));
+    vec2 f = g - vec2(b);
+
+    float sum = 0.0;
+    float wsum = 0.0;
+    for (int dy = 0; dy < 2; dy++) {
+        for (int dx = 0; dx < 2; dx++) {
+            ivec2 c = b + ivec2(dx, dy);
+            if (!inRange(comp, c)) continue;
+            if (!faceValid(comp, c)) continue;
+            float wx = dx == 0 ? 1.0 - f.x : f.x;
+            float wy = dy == 0 ? 1.0 - f.y : f.y;
+            float wt = wx * wy;
+            uint fi = faceIndex(comp, c);
+            sum += wt * (use_old ? old_vel[fi] : vel[fi]);
+            wsum += wt;
+        }
+    }
+    return wsum > 0.0 ? sum / wsum : 0.0;
+}
+
+// ---------------------------------------------------------------- passes
+
+// k-th cell (row-major) of the drop's disc, relative to its bounding square.
+// The predicate is integer-only so the CPU (Fluid.dropCellCount) agrees
+// exactly: a cell is inside if its centre is within d/2 of the square's centre.
+ivec2 dropCell(uint k) {
+    int d = int(pc.drop_d);
+    uint seen = 0u;
+    for (int cy = 0; cy < d; cy++) {
+        for (int cx = 0; cx < d; cx++) {
+            int ex = 2 * cx + 1 - d;
+            int ey = 2 * cy + 1 - d;
+            if (ex * ex + ey * ey <= d * d) {
+                if (seen == k) return ivec2(cx, cy);
+                seen++;
+            }
+        }
+    }
+    return ivec2(0);
+}
+
+// Particles [0, pool_count) fill a full-width pool pc.arg cells deep on the
+// floor. The rest fill a round drop above it, moving downward. Both use 2x2
+// jittered particles per cell.
+void passInit(uint i) {
+    uint cell = i / 4u;
+    uint sub = i % 4u;
+
+    ivec2 base;
+    vec2 v = vec2(0.0);
+    if (i < pc.pool_count) {
+        uint bw = pc.w - 2u;
+        base = ivec2(1 + int(cell % bw),
+                     int(pc.h) - 1 - int(pc.arg) + int(cell / bw));
+    } else {
+        base = ivec2(pc.drop_x, pc.drop_y) + dropCell(cell - pc.pool_count / 4u);
+        v = vec2(0.0, pc.drop_speed);
+    }
+
+    uint rng = pcg(i * 9781u + 12345u);
+    vec2 sub_off = vec2(0.25 + 0.5 * float(sub & 1u), 0.25 + 0.5 * float(sub >> 1u));
+    vec2 jitter = vec2(next(rng) - 0.5, next(rng) - 0.5) * 0.4;
+
+    Particle p;
+    p.pos = vec2(base) + sub_off + jitter;
+    p.vel = v;
+    particles[i] = p;
+}
+
+void passClear(uint i) {
+    acc[i] = 0;
+}
+
+void passP2G(uint i) {
+    Particle p = particles[i];
+    ivec2 cell = clamp(ivec2(floor(p.pos)), ivec2(0), ivec2(pc.w, pc.h) - 1);
+    atomicAdd(acc[countIndex(cell)], 1);
+    splat(p.pos, 0u, p.vel.x);
+    splat(p.pos, 1u, p.vel.y);
+}
+
+void passNormalize(uint f) {
+    uint nu = NU();
+    uint comp = f < nu ? 0u : 1u;
+    uint local = comp == 0u ? f : f - nu;
+    uint dx = uint(dimsOf(comp).x);
+    ivec2 c = ivec2(int(local % dx), int(local / dx));
+
+    int sum = acc[2u * f];
+    int wt = acc[2u * f + 1u];
+    float v = wt > 0 ? float(sum) / float(wt) : 0.0;
+
+    bool wall = isWallFace(comp, c);
+    if (wall) v = 0.0;
+
+    old_vel[f] = v;
+
+    if (!wall && comp == 1u) v += pc.gravity * pc.dt;
+    vel[f] = v;
+}
+
+// One red-black Gauss-Seidel sweep of the pressure projection, adjusting face
+// velocities directly. Cells of one colour never share a face, so no races.
+void passSolve(uint cell) {
+    ivec2 c = ivec2(int(cell % pc.w), int(cell / pc.w));
+    if (((c.x + c.y) & 1) != int(pc.arg)) return;
+    if (!isFluid(c)) return;
+
+    float sx0 = isSolid(c + ivec2(-1, 0)) ? 0.0 : 1.0;
+    float sx1 = isSolid(c + ivec2( 1, 0)) ? 0.0 : 1.0;
+    float sy0 = isSolid(c + ivec2(0, -1)) ? 0.0 : 1.0;
+    float sy1 = isSolid(c + ivec2(0,  1)) ? 0.0 : 1.0;
+    float s = sx0 + sx1 + sy0 + sy1;
+    if (s == 0.0) return;
+
+    uint iu0 = faceIndex(0u, c);
+    uint iu1 = faceIndex(0u, c + ivec2(1, 0));
+    uint iv0 = faceIndex(1u, c);
+    uint iv1 = faceIndex(1u, c + ivec2(0, 1));
+
+    float div = vel[iu1] - vel[iu0] + vel[iv1] - vel[iv0];
+
+    // Drift compensation: where particles bunch up beyond rest density, ask
+    // the solver for outward flow so the volume doesn't slowly collapse.
+    float compression = float(acc[countIndex(c)]) / REST_COUNT - 1.0;
+    if (compression > 0.0) div -= pc.stiffness * compression;
+
+    float p = -div / s * OMEGA;
+    vel[iu0] -= sx0 * p;
+    vel[iu1] += sx1 * p;
+    vel[iv0] -= sy0 * p;
+    vel[iv1] += sy1 * p;
+}
+
+void passG2P(uint i) {
+    Particle p = particles[i];
+
+    vec2 pic = vec2(gather(p.pos, 0u, false), gather(p.pos, 1u, false));
+    vec2 old = vec2(gather(p.pos, 0u, true),  gather(p.pos, 1u, true));
+    vec2 flip = p.vel + (pic - old);
+
+    vec2 v = mix(pic, flip, pc.flip_ratio);
+    float speed = length(v);
+    if (speed > MAX_SPEED) v *= MAX_SPEED / speed;
+
+    vec2 pos = p.pos + v * pc.dt;
+
+    vec2 lo = vec2(1.0 + WALL_EPS);
+    vec2 hi = vec2(float(pc.w), float(pc.h)) - 1.0 - WALL_EPS;
+    if (pos.x < lo.x) { pos.x = lo.x; v.x = 0.0; }
+    if (pos.x > hi.x) { pos.x = hi.x; v.x = 0.0; }
+    if (pos.y < lo.y) { pos.y = lo.y; v.y = 0.0; }
+    if (pos.y > hi.y) { pos.y = hi.y; v.y = 0.0; }
+
+    p.pos = pos;
+    p.vel = v;
+    particles[i] = p;
+}
+
+void main() {
+    uint i = gl_GlobalInvocationID.x;
+    if (i >= pc.n) return;
+
+    switch (pc.mode) {
+        case MODE_INIT:      passInit(i);      break;
+        case MODE_CLEAR:     passClear(i);     break;
+        case MODE_P2G:       passP2G(i);       break;
+        case MODE_NORMALIZE: passNormalize(i); break;
+        case MODE_SOLVE:     passSolve(i);     break;
+        case MODE_G2P:       passG2P(i);       break;
+    }
+}

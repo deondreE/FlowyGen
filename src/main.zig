@@ -11,10 +11,9 @@ const Buffer = @import("Buffer.zig");
 const Time = @import("Time.zig");
 const TextRenderer = @import("TextRenderer.zig");
 const Font = @import("stb_zig.zig").Font;
-const Particles = @import("Particles.zig");
+const Fluid = @import("Fluid.zig");
 const flowygen = @import("flowygen");
 
-const particle_count = 100_000;
 const font_data = @embedFile("fonts/Roboto.ttf");
 
 const Vertex = extern struct {
@@ -53,7 +52,7 @@ const App = struct {
     vertex_buffer: ?*Buffer = null,
     ui_buffer: ?*Buffer = null,
     text: ?*TextRenderer = null,
-    particles: ?*Particles = null,
+    fluid: ?*Fluid = null,
     fps_log_timer: f64 = 0,
 };
 
@@ -64,7 +63,7 @@ fn drawFrame(window: *Window, app: *App) !void {
     const vertex_buffer = app.vertex_buffer orelse return;
     const ui_buffer = app.ui_buffer orelse return;
     const text = app.text orelse return;
-    const particles = app.particles orelse return;
+    const fluid = app.fluid orelse return;
 
     app.time.tick();
     const dt: f32 = @floatCast(app.time.delta);
@@ -77,7 +76,8 @@ fn drawFrame(window: *Window, app: *App) !void {
 
     var frame = (try renderer.beginFrame(window)) orelse return;
 
-    particles.update(&frame, dt, @floatCast(app.time.elapsed));
+    // Compute work has to be recorded outside the rendering scope.
+    fluid.update(&frame, dt);
 
     const pulse = 0.5 + 0.5 * @as(f32, @floatCast(app.time.elapsed * 0.5));
 
@@ -88,8 +88,8 @@ fn drawFrame(window: *Window, app: *App) !void {
     frame.bindVertexBuffer(vertex_buffer);
     frame.draw(3);
 
-    // Particles
-    particles.draw(&frame);
+    // Fluid
+    fluid.draw(&frame);
 
     // UI
     frame.bindPipeline(ui_pipeline);
@@ -170,8 +170,9 @@ pub fn main(init: std.process.Init) !void {
     var text: TextRenderer = try TextRenderer.init(&context, gpa, swapchain.format, &font, 24, 4096);
     defer text.deinit();
 
-    var particles: Particles = try Particles.init(&context, swapchain.format, particle_count);
-    defer particles.deinit();
+    // 256x128 cell domain with a dam-break block; tweak via Fluid.Config.
+    var fluid: Fluid = try Fluid.init(&context, swapchain.format, .{});
+    defer fluid.deinit();
 
     var renderer: Renderer = try Renderer.init(&context, &swapchain);
     defer renderer.deinit();
@@ -182,7 +183,7 @@ pub fn main(init: std.process.Init) !void {
     app.ui_pipeline = &ui_pipeline;
     app.ui_buffer = &ui_buffer;
     app.text = &text;
-    app.particles = &particles;
+    app.fluid = &fluid;
 
     while (!window.shouldClose()) {
         if (window.isMinimized()) {
